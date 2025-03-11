@@ -2,7 +2,7 @@
 FROM apache/airflow:latest
 
 # Set the working directory
-WORKDIR /airflow
+WORKDIR /opt/airflow
 
 # Copy requirements.txt if additional Python packages are needed
 COPY requirements.txt .
@@ -11,10 +11,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Ensure DAGs directory exists before copying
-COPY /airflow/dags /airflow/dags
+COPY opt/airflow/dags /opt/airflow/dags
 
 # Set Airflow environment variables
-ENV AIRFLOW_HOME=//airflow
+ENV AIRFLOW_HOME=/opt/airflow
 
 # Initialize the Airflow database
 RUN airflow db init
