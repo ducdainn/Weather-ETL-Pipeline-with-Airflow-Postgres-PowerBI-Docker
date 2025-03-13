@@ -15,53 +15,73 @@ default_args = {
     'retries': 1,
 }
 
-df = pd.read_csv("D:/Learning/DE/Weather/Sub_Data/vietnam_provinces.csv")  # Ensure correct path
-provinces = df.to_dict(orient="records")  # Convert DataFrame to a list of dicts
+df = pd.read_csv("/opt/airflow/dags/Sub_Data/vietnam_provinces.csv")  
+provinces = df.to_dict(orient="records")  # Convert CSV data to list of dictionaries
 
 with DAG(
     'weather_etl_pipeline',
     default_args=default_args,
-    description='Weather ETL pipeline visualization',
+    description='Weather ETL pipeline with reduced tasks',
     schedule_interval='@daily',
     catchup=False
 ) as dag:
 
     @task()
-    def extract_task(latitude, longitude):
+    def extract_task(provinces):
+        """ Fetch weather data for all provinces and return as a dictionary. """
         http_hook = HttpHook(http_conn_id=API_CONN_ID, method='GET')
-        endpoint = f'/v1/forecast?latitude={latitude}&longitude={longitude}&hourly=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,wind_gusts_10m,visibility,dew_point_2m,wind_direction_10m,cloud_cover&forecast_days=1'
+        raw_data = {}
 
-        response = http_hook.run(endpoint)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise Exception(f'Failed to fetch data: {response.status_code}')
+        for province in provinces:
+            latitude = province['Latitude']
+            longitude = province['Longitude']
+            
+            endpoint = f'/v1/forecast?latitude={latitude}&longitude={longitude}&hourly=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,wind_gusts_10m,visibility,dew_point_2m,wind_direction_10m,cloud_cover&forecast_days=1'
+            response = http_hook.run(endpoint)
+
+            if response.status_code == 200:
+                raw_data[province['Province']] = {
+                    'latitude': latitude,
+                    'longitude': longitude,
+                    'data': response.json()['hourly']
+                }
+            else:
+                raise Exception(f'Failed to fetch data for {province["Province"]}: {response.status_code}')
+
+        return raw_data  # Dictionary containing data for all provinces
 
     @task()
-    def transform_task(weather_data, province_name, latitude, longitude):
-        current_weather = weather_data['hourly']
+    def transform_task(raw_data):
+        """ Transform all extracted data into structured format. """
         transformed_data = []
-        
-        for hour in range(len(current_weather['time'])):
-            transformed_data.append({
-                'province': province_name,
-                'latitude': latitude,
-                'longitude': longitude,
-                'time': current_weather['time'][hour],  # Add time column
-                'temperature_2m': current_weather['temperature_2m'][hour],
-                'relative_humidity_2m': current_weather['relative_humidity_2m'][hour],
-                'rain': current_weather['rain'][hour],
-                'wind_speed_10m': current_weather['wind_speed_10m'][hour],
-                'wind_gusts_10m': current_weather['wind_gusts_10m'][hour],
-                'visibility': current_weather['visibility'][hour],
-                'dew_point_2m': current_weather['dew_point_2m'][hour],
-                'wind_direction_10m': current_weather['wind_direction_10m'][hour],
-                'cloud_cover': current_weather['cloud_cover'][hour],
-            })
-        return transformed_data  # Returns a list of dictionaries
+
+        for province, weather_info in raw_data.items():
+            latitude = weather_info['latitude']
+            longitude = weather_info['longitude']
+            weather_data = weather_info['data']
+
+            for hour in range(len(weather_data['time'])):
+                transformed_data.append({
+                    'province': province,
+                    'latitude': latitude,
+                    'longitude': longitude,
+                    'time': weather_data['time'][hour],
+                    'temperature_2m': weather_data['temperature_2m'][hour],
+                    'relative_humidity_2m': weather_data['relative_humidity_2m'][hour],
+                    'precipitation': weather_data['precipitation'][hour],
+                    'wind_speed_10m': weather_data['wind_speed_10m'][hour],
+                    'wind_gusts_10m': weather_data['wind_gusts_10m'][hour],
+                    'visibility': weather_data['visibility'][hour],
+                    'dew_point_2m': weather_data['dew_point_2m'][hour],
+                    'wind_direction_10m': weather_data['wind_direction_10m'][hour],
+                    'cloud_cover': weather_data['cloud_cover'][hour],
+                })
+
+        return transformed_data  # List of transformed weather records
 
     @task()
     def load_task(transformed_data):
+        """ Load transformed data into PostgreSQL. """
         pg_hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
         conn = pg_hook.get_conn()
         cursor = conn.cursor()
@@ -75,7 +95,7 @@ with DAG(
             time TIMESTAMP,
             temperature_2m FLOAT,
             relative_humidity_2m FLOAT,
-            rain FLOAT,
+            precipitation FLOAT,
             wind_speed_10m FLOAT,
             wind_gusts_10m FLOAT,
             visibility FLOAT,
@@ -86,31 +106,30 @@ with DAG(
         );
         """)
 
-        for row in transformed_data:
-            cursor.execute("""
-            INSERT INTO weather_data (province, latitude, longitude, time, temperature_2m, relative_humidity_2m, rain, wind_speed_10m, wind_gusts_10m, visibility, dew_point_2m, wind_direction_10m, cloud_cover)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
-            """, (
-                row['province'],
-                row['latitude'],
-                row['longitude'],
-                row['time'],  # Insert time column
-                row['temperature_2m'],
-                row['relative_humidity_2m'],
-                row['rain'],
-                row['wind_speed_10m'],
-                row['wind_gusts_10m'],
-                row['visibility'],
-                row['dew_point_2m'],
-                row['wind_direction_10m'],
-                row['cloud_cover']
-            ))
+        insert_query = """
+        INSERT INTO weather_data 
+        (province, latitude, longitude, time, temperature_2m, relative_humidity_2m, precipitation, wind_speed_10m, wind_gusts_10m, visibility, dew_point_2m, wind_direction_10m, cloud_cover)
+        VALUES %s;
+        """
+
+        # Convert list of dicts to list of tuples
+        data_tuples = [
+            (
+                row['province'], row['latitude'], row['longitude'], row['time'],
+                row['temperature_2m'], row['relative_humidity_2m'], row['precipitation'],
+                row['wind_speed_10m'], row['wind_gusts_10m'], row['visibility'],
+                row['dew_point_2m'], row['wind_direction_10m'], row['cloud_cover']
+            )
+            for row in transformed_data
+        ]
+
+        from psycopg2.extras import execute_values
+        execute_values(cursor, insert_query, data_tuples)  # Bulk insert
 
         conn.commit()
         cursor.close()
 
-    # Dynamically create tasks for each province
-    for province in provinces:
-        extracted_data = extract_task(province['Latitude'], province['Longitude'])
-        transformed_data = transform_task(extracted_data, province['Province'], province['Latitude'], province['Longitude'])
-        load_task(transformed_data)
+    # Define task dependencies
+    extracted_data = extract_task(provinces)
+    transformed_data = transform_task(extracted_data)
+    load_task(transformed_data)

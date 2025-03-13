@@ -30,7 +30,7 @@ services:
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@weather-postgres-1:5432/weather
     volumes:
       - ./opt/airflow/dags:/opt/airflow/dags
-      - "D:/Learning/DE/Weather/Sub_Data:/opt/airflow/dags/Sub_Data"      
+      - "/d/Learning/DE/Weather/Sub_Data:/opt/airflow/dags/Sub_Data"
 
     ports:
       - "8080:8080"

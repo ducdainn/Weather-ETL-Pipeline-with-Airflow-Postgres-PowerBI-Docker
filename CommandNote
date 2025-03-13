@@ -1,0 +1,13 @@
+Create a connection to api website:
+    ConnectionID: open_meteo_api
+    ConnectionType: HTTP
+    Host: https://api.open-meteo.com/
+
+Create a connection to Postgres:
+    ConnectionID: postgres_weather    
+    ConnectionType: Postgres       
+    Host: weather-postgres-1      # Container name
+    Database: weather             # Set in docker compose
+    Login: airflow                # Set in docker compose
+    Password: aiflow              # Set in docker compose
+    Port: 5432
